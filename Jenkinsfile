@@ -4,8 +4,8 @@ pipeline {
     IMAGE_NAME = 'papermc-builder'
     IMAGE_TAG = 'latest' // override in Jenkins job or leave as 'latest'
     PUSH_IMAGE = 'false' // set to 'true' to push to registry
-    REGISTRY = '' // e.g. "registry.example.com" (optional)
-    REG_CRED = '' // Jenkins credentialsId for registry (optional)
+    REGISTRY = 'docker.lsgserver.dev' // e.g. "registry.example.com" (optional)
+    REG_CRED = 'registry-auth' // Jenkins credentialsId for registry (optional)
   }
 
   stages {
