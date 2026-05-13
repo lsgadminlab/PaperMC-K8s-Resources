@@ -1,6 +1,5 @@
 pipeline {
   agent any
-  options { timestamps() }
   environment {
     IMAGE_NAME = 'papermc-builder'
     IMAGE_TAG = 'latest' // override in Jenkins job or leave as 'latest'
