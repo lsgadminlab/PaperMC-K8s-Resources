@@ -7,6 +7,7 @@ pipeline {
   environment {
     IMAGE_NAME = 'papermc'
     IMAGE_TAG = '1.21.4' // set to 1.21.4 for PaperMC 1.21.4
+    GRADLE_JAVA_IMAGE = 'eclipse-temurin:21-jdk' // Gradle/Kotlin DSL runs under Java 21 for compatibility
     PUSH_IMAGE = 'true' // push to docker.lsgserver.dev registry
     REGISTRY = 'docker.lsgserver.dev' // registry host
     REG_CRED = 'registry-auth' // Jenkins credentialsId for registry authentication
@@ -44,12 +45,22 @@ pipeline {
     stage('Build with Gradle') {
       steps {
         script {
-          echo 'Building PaperMC with Gradle...'
+          echo 'Building PaperMC with Gradle inside a Java 21 container...'
           sh '''
+            command -v docker >/dev/null 2>&1 || { echo "ERROR: docker CLI not found; DinD sidecar is required for the Java 21 Gradle container."; exit 1; }
+
             # Ensure gradlew is executable
             chmod +x ./gradlew
-            # Run the gradle build using the included wrapper
-            ./gradlew --no-daemon --stacktrace clean build
+
+            # Run the gradle build using Java 21 so Kotlin DSL can initialize correctly
+            docker run --rm \
+              -u "$(id -u):$(id -g)" \
+              -e HOME=/tmp \
+              -e GRADLE_USER_HOME=/workspace/.gradle \
+              -v "$(pwd):/workspace" \
+              -w /workspace \
+              "${GRADLE_JAVA_IMAGE}" \
+              ./gradlew --no-daemon --stacktrace clean build
           '''
         }
       }
