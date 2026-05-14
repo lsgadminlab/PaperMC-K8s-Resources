@@ -20,84 +20,59 @@ pipeline {
       }
     }
 
-    stage('Build Docker Image with Kaniko') {
+    stage('Build with Gradle') {
+      steps {
+        script {
+          echo 'Building PaperMC with Gradle...'
+          sh '''
+            # Ensure gradlew is executable
+            chmod +x ./gradlew
+            # Run the gradle build using the included wrapper
+            ./gradlew --no-daemon clean build
+          '''
+        }
+      }
+    }
+
+    stage('Build Docker Image with DinD') {
       steps {
         script {
           // Compute image tag: prefer static IMAGE_TAG from env
           def tag = env.IMAGE_TAG?.trim() ?: (env.BUILD_NUMBER ?: 'latest')
           env.IMAGE_TAG = tag
 
-          // Determine build destination: push to registry (if configured) or save as tar
-          def kaniko_args = ''
+          // Check if we should push to registry
           if (env.PUSH_IMAGE == 'true' && env.REGISTRY?.trim()) {
             def registryImage = "${env.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-            kaniko_args = "--destination=${registryImage} --push"
-            echo "Kaniko will build and push to registry: ${registryImage}"
-          } else {
-            // Export image as tar file for local artifact extraction
-            kaniko_args = "--tar-path=${env.ARTIFACTS_DIR}/image.tar"
-            echo "Kaniko will build and export to tar: ${env.ARTIFACTS_DIR}/image.tar"
-          }
+            echo "Building and pushing Docker image to: ${registryImage}"
 
-          // Use Kaniko via Docker with registry credentials
-          // For registry push: provide credentials via withCredentials and docker config
-          if (env.PUSH_IMAGE == 'true' && env.REG_CRED?.trim()) {
-            // Use Jenkins credentials for registry authentication
-            withCredentials([usernamePassword(credentialsId: "${env.REG_CRED}", passwordVariable: 'REG_PASS', usernameVariable: 'REG_USER')]) {
-              sh '''
-                mkdir -p ${ARTIFACTS_DIR}
-                mkdir -p ~/.docker
+            if (env.REG_CRED?.trim()) {
+              // Use Jenkins credentials for registry authentication
+              withCredentials([usernamePassword(credentialsId: "${env.REG_CRED}", passwordVariable: 'REG_PASS', usernameVariable: 'REG_USER')]) {
+                sh '''
+                  echo "Logging in to Docker registry ${REGISTRY}..."
+                  echo "${REG_PASS}" | docker login -u "${REG_USER}" --password-stdin "${REGISTRY}"
 
-                # Create docker config for Kaniko to use
-                cat > ~/.docker/config.json <<EOF
-{
-  "auths": {
-    "${REGISTRY}": {
-      "username": "${REG_USER}",
-      "password": "${REG_PASS}",
-      "auth": "$(echo -n ${REG_USER}:${REG_PASS} | base64)"
-    }
-  }
-}
-EOF
+                  echo "Building Docker image: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+                  docker build -f Dockerfile.runtime -t "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" .
 
-                # Try using kaniko executor directly (for Kubernetes agents with kaniko)
-                if command -v /kaniko/executor >/dev/null 2>&1; then
-                  /kaniko/executor --context=. --dockerfile=Dockerfile ''' + kaniko_args + ''' --docker-config=/root/.docker
-                # Fallback: use Kaniko via Docker image
-                elif command -v docker >/dev/null 2>&1; then
-                  docker run --rm \
-                    -v $(pwd):/workspace \
-                    -v ~/.docker:/kaniko/.docker \
-                    gcr.io/kaniko-project/executor:latest \
-                    --context=/workspace \
-                    --dockerfile=/workspace/Dockerfile ''' + kaniko_args + '''
-                else
-                  echo "ERROR: Neither Kaniko executor nor Docker found"
-                  exit 1
-                fi
-              '''
+                  echo "Pushing image to registry..."
+                  docker push "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+
+                  echo "Logging out..."
+                  docker logout "${REGISTRY}"
+
+                  echo "✅ Docker image successfully pushed: ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+                '''
+              }
+            } else {
+              echo "❌ ERROR: REG_CRED not set. Cannot push without credentials."
+              sh 'exit 1'
             }
           } else {
-            // No registry push, use Kaniko without credentials
-            sh '''
-              mkdir -p ${ARTIFACTS_DIR}
-
-              # Try using kaniko executor directly
-              if command -v /kaniko/executor >/dev/null 2>&1; then
-                /kaniko/executor --context=. --dockerfile=Dockerfile ''' + kaniko_args + '''
-              # Fallback: use Kaniko via Docker
-              elif command -v docker >/dev/null 2>&1; then
-                docker run --rm \
-                  -v $(pwd):/workspace \
-                  gcr.io/kaniko-project/executor:latest \
-                  --context=/workspace \
-                  --dockerfile=/workspace/Dockerfile ''' + kaniko_args + '''
-              else
-                echo "ERROR: Neither Kaniko executor nor Docker found"
-                exit 1
-              fi
-            '''
+            echo "⚠️ PUSH_IMAGE is false or REGISTRY not set. Skipping Docker push."
+            echo "Building local Docker image for inspection..."
+            sh 'docker build -f Dockerfile.runtime -t "${IMAGE_NAME}:${IMAGE_TAG}" .'
           }
         }
       }
@@ -106,26 +81,14 @@ EOF
     stage('Extract Artifacts') {
       steps {
         script {
-          echo 'Extracting build artifacts...'
+          echo 'Collecting build artifacts from Gradle build...'
           sh '''
             mkdir -p ${ARTIFACTS_DIR}
-            # If Kaniko exported as tar, extract JARs from the tar file
-            if [ -f "${ARTIFACTS_DIR}/image.tar" ]; then
-              echo "Extracting artifacts from tar file..."
-              cd ${ARTIFACTS_DIR}
-              tar -xf image.tar || true
-              # Look for JARs in the extracted layers and blob directories
-              find . -type f -name "*.jar" -exec cp {} . \\; 2>/dev/null || true
-              # Clean up the tar and intermediate files
-              rm -f image.tar
-              ls -la
-            else
-              echo "No tar file found; assuming image was pushed to registry."
-              echo "Note: To extract artifacts from a registry image, you would need:"
-              echo "  - A running container from the image, or"
-              echo "  - Tools like skopeo or dive to inspect the image layers"
-              echo "See README.md for more details on artifact extraction from registry images."
-            fi
+            # Find all JARs from the gradle build directories and copy to artifacts
+            find . -type f -path "*/build/libs/*.jar" -exec cp {} ${ARTIFACTS_DIR}/ \;
+
+            echo "Artifacts collected:"
+            ls -lah ${ARTIFACTS_DIR}/ || echo "No artifacts found"
           '''
         }
       }
@@ -137,15 +100,15 @@ EOF
       }
     }
 
-    stage('Push Image (Optional)') {
+    stage('Verify Image') {
       when {
         expression { return env.PUSH_IMAGE == 'true' && env.REGISTRY?.trim() }
       }
       steps {
         script {
-          // If using Kaniko, the push happens during the build stage
-          echo "Note: Kaniko already pushed the image during the build stage."
-          echo "Image destination: ${env.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          echo "✅ Docker image successfully built and pushed!"
+          echo "Image: ${env.REGISTRY}/${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+          sh 'docker images | grep -E "REPOSITORY|${IMAGE_NAME}"'
         }
       }
     }
