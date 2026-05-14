@@ -49,7 +49,7 @@ pipeline {
             # Ensure gradlew is executable
             chmod +x ./gradlew
             # Run the gradle build using the included wrapper
-            ./gradlew --no-daemon clean build
+            ./gradlew --no-daemon --stacktrace clean build
           '''
         }
       }
