@@ -20,6 +20,27 @@ pipeline {
       }
     }
 
+    stage('Verify Java 25') {
+      steps {
+        script {
+          echo 'Checking for Java 25...'
+          sh '''
+            java -version 2>&1
+            JAVA_VERSION=$(java -version 2>&1 | grep -oP '(?<=version ")(\\d+)' | head -1)
+            echo "Detected Java version: $JAVA_VERSION"
+            if [ "$JAVA_VERSION" != "25" ]; then
+              echo "⚠️  WARNING: Java version is $JAVA_VERSION, but Paper 1.21.4 requires Java 25"
+              echo "To fix this in Kubernetes Jenkins, ensure the pod has Java 25 installed"
+              echo "export JAVA_HOME to point to Java 25 installation"
+              exit 1
+            else
+              echo "✅ Java 25 detected"
+            fi
+          '''
+        }
+      }
+    }
+
     stage('Build with Gradle') {
       steps {
         script {
