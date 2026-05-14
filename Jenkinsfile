@@ -85,7 +85,7 @@ pipeline {
           sh '''
             mkdir -p ${ARTIFACTS_DIR}
             # Find all JARs from the gradle build directories and copy to artifacts
-            find . -type f -path "*/build/libs/*.jar" -exec cp {} ${ARTIFACTS_DIR}/ \;
+            find . -type f -path "*/build/libs/*.jar" -exec cp {} ${ARTIFACTS_DIR}/ \\;
 
             echo "Artifacts collected:"
             ls -lah ${ARTIFACTS_DIR}/ || echo "No artifacts found"
