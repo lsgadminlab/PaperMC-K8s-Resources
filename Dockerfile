@@ -1,43 +1,77 @@
-# Multi-stage Dockerfile for building PaperMC with the included Gradle wrapper
-# Java 25: builder stage uses OpenJDK 25 to run the Gradle build and collects produced jars
-# runtime stage: small OpenJDK 25 runtime image that contains the build artifacts
+# ─────────────────────────────────────────────
+# Stage 1: Download PaperMC JAR
+# ─────────────────────────────────────────────
+FROM eclipse-temurin:21-jdk-alpine AS builder
 
-FROM openjdk:25-jdk-slim AS builder
+ARG PAPER_VERSION=1.21.4
+ARG PAPER_BUILD=latest
 
-WORKDIR /workspace
+WORKDIR /build
 
-# Copy the full repository into the image
-COPY . .
+RUN apk add --no-cache curl jq
 
-# Install small tools used by the build and artifact collection
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git findutils \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    if [ "${PAPER_BUILD}" = "latest" ]; then \
+        PAPER_BUILD=$(curl -fsSL \
+            "https://api.papermc.io/v2/projects/paper/versions/${PAPER_VERSION}/builds" \
+            | jq -r '.builds[-1].build'); \
+    fi; \
+    echo "Downloading PaperMC ${PAPER_VERSION} build ${PAPER_BUILD}..."; \
+    curl -fsSL -o paper.jar \
+        "https://api.papermc.io/v2/projects/paper/versions/${PAPER_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${PAPER_VERSION}-${PAPER_BUILD}.jar"
 
-# Ensure the Gradle wrapper is executable
-RUN chmod +x ./gradlew
+# ─────────────────────────────────────────────
+# Stage 2: Runtime image
+# ─────────────────────────────────────────────
+FROM eclipse-temurin:21-jre-alpine
 
-# Allow Gradle/Java to use more memory if available
-ENV JAVA_TOOL_OPTIONS="-Xmx2g"
+LABEL maintainer="lsgadminlab" \
+      org.opencontainers.image.title="PaperMC" \
+      org.opencontainers.image.version="1.21.4" \
+      org.opencontainers.image.source="https://github.com/lsgadminlab/PaperMC-K8s-Resources"
 
-# Run the Gradle build. Use --no-daemon for CI friendliness.
-RUN ./gradlew --no-daemon clean build
+ENV MC_RAM_MIN=1G \
+    MC_RAM_MAX=2G \
+    MC_EXTRA_OPTS=""
 
-# Collect any produced jars from modules under their build/libs directories
-RUN mkdir -p /workspace/artifacts \
-    && find . -type f -path "*/build/libs/*.jar" -exec cp {} /workspace/artifacts/ \;
+RUN addgroup -S minecraft && adduser -S minecraft -G minecraft
 
+WORKDIR /server
 
-FROM openjdk:25-jre-slim AS runtime
+COPY --from=builder /build/paper.jar paper.jar
 
-WORKDIR /opt/app
+RUN echo "eula=true" > eula.txt
 
-# Copy artifacts from the builder stage into the runtime image
-COPY --from=builder /workspace/artifacts/ /opt/app/
+COPY --chown=minecraft:minecraft . .
 
-# Default command: show the artifacts and keep the container alive so Jenkins or users
-# can copy files out (docker cp) or run the server manually. If you want the container
-# to run the server automatically, replace this CMD with the specific jar execution.
-CMD ["sh", "-c", "ls -la /opt/app && echo 'Artifacts are in /opt/app' && sleep infinity"]
+RUN chown -R minecraft:minecraft /server
 
+USER minecraft
 
+EXPOSE 25565
+
+ENTRYPOINT ["sh", "-c", \
+    "exec java \
+        -Xms${MC_RAM_MIN} \
+        -Xmx${MC_RAM_MAX} \
+        -XX:+UseG1GC \
+        -XX:+ParallelRefProcEnabled \
+        -XX:MaxGCPauseMillis=200 \
+        -XX:+UnlockExperimentalVMOptions \
+        -XX:+DisableExplicitGC \
+        -XX:+AlwaysPreTouch \
+        -XX:G1NewSizePercent=30 \
+        -XX:G1MaxNewSizePercent=40 \
+        -XX:G1HeapRegionSize=8M \
+        -XX:G1ReservePercent=20 \
+        -XX:G1HeapWastePercent=5 \
+        -XX:G1MixedGCCountTarget=4 \
+        -XX:InitiatingHeapOccupancyPercent=15 \
+        -XX:G1MixedGCLiveThresholdPercent=90 \
+        -XX:G1RSetUpdatingPauseTimePercent=5 \
+        -XX:SurvivorRatio=32 \
+        -XX:+PerfDisableSharedMem \
+        -XX:MaxTenuringThreshold=1 \
+        ${MC_EXTRA_OPTS} \
+        -jar paper.jar \
+        --nogui"]
