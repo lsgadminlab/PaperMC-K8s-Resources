@@ -31,7 +31,7 @@ LABEL maintainer="lsgadminlab" \
       org.opencontainers.image.source="https://github.com/lsgadminlab/PaperMC-K8s-Resources"
 
 ENV MC_RAM_MIN=1G \
-    MC_RAM_MAX=2G \
+    MC_RAM_MAX=4G \
     MC_EXTRA_OPTS=""
 
 RUN addgroup -S minecraft && adduser -S minecraft -G minecraft
