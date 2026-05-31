@@ -164,7 +164,7 @@ unsupported-settings: \
 watchdog: \
   early-warning-delay: 10000 \
   early-warning-every: 5000 \
-
+ \
 EOF
 
 COPY --chown=minecraft:minecraft . .
