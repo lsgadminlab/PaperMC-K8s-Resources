@@ -46,6 +46,11 @@ COPY --chown=minecraft:minecraft . .
 
 RUN chown -R minecraft:minecraft /server
 
+USER root
+
+RUN apt-get update
+RUN apt-get install nano
+
 USER minecraft
 
 EXPOSE 25565
