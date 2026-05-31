@@ -41,6 +41,7 @@ WORKDIR /server
 COPY --from=builder /build/paper.jar paper.jar
 
 RUN echo "eula=true" > eula.txt
+
 RUN cat <<EOF | tee /server/config/paper-global.yml \
 _version: 29 \
 block-updates: \
